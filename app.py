@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import matplotlib.pyplot as plt
 import requests
@@ -5,7 +6,7 @@ import time
 import json
 import os
 from datetime import datetime
-from kerykeion import KrInstance   
+from kerykeion.backword import AstrologicalSubjectFactory
 from geopy.geocoders import Nominatim
 
 st.set_page_config(page_title="Lal Kitab AI Astro", page_icon="🪐", layout="wide")
@@ -72,43 +73,73 @@ if st.sidebar.button("Generate All Charts & Vedic Details"):
     }
 
 # ====================== CHART CALCULATION (now returns full chart) ======================
+def _house_name_to_number(house_name):
+    if not house_name:
+        return None
+    match = re.search(r"(\d+)", house_name)
+    if match:
+        return int(match.group(1))
+    house_map = {
+        "First_House": 1,
+        "Second_House": 2,
+        "Third_House": 3,
+        "Fourth_House": 4,
+        "Fifth_House": 5,
+        "Sixth_House": 6,
+        "Seventh_House": 7,
+        "Eighth_House": 8,
+        "Ninth_House": 9,
+        "Tenth_House": 10,
+        "Eleventh_House": 11,
+        "Twelfth_House": 12,
+    }
+    return house_map.get(house_name, None)
+
+
 def get_full_chart(birth_details, year=None, month=None, day=None):
     try:
         geolocator = Nominatim(user_agent="lal_kitab_app")
         loc = geolocator.geocode(birth_details["place"] + ", India")
-        if not loc: 
+        if not loc:
             st.error("Location not found.")
             return None, None
-        
+
         use_date = birth_details["date"]
-        if year: use_date = use_date.replace(year=year)
-        if month and day: use_date = use_date.replace(month=month, day=day)
-        
-        # ← Yeh line change karo
-        chart = KrInstance(
+        if year:
+            use_date = use_date.replace(year=year)
+        if month and day:
+            use_date = use_date.replace(month=month, day=day)
+
+        chart = AstrologicalSubjectFactory.from_birth_data(
             name=birth_details["name"],
             year=use_date.year,
             month=use_date.month,
             day=use_date.day,
             hour=birth_details["time"].hour,
             minute=birth_details["time"].minute,
-            city=birth_details["place"],
-            nation="IN",
             lat=loc.latitude,
             lng=loc.longitude,
-            tz=5.5,
-            sidereal=True,
-            ayanamsa="lahiri"
+            tz_str="Asia/Kolkata",
+            online=False,
+            zodiac_type="Sidereal",
+            sidereal_mode="LAHIRI"
         )
-        
+
         planet_house = {}
-        for p in chart.planets:
-            if p["name"] in ["Mean_Node", "True_Node"]:
-                planet_house["Rahu"] = p["house"]
-            elif p["name"] == "Mean_Asc_Node":
-                planet_house["Ketu"] = p["house"]
-            else:
-                planet_house[p["name"]] = p["house"]
+        point_map = {
+            "Sun": chart.sun,
+            "Moon": chart.moon,
+            "Mars": chart.mars,
+            "Mercury": chart.mercury,
+            "Jupiter": chart.jupiter,
+            "Venus": chart.venus,
+            "Saturn": chart.saturn,
+            "Rahu": chart.true_north_lunar_node,
+            "Ketu": chart.true_south_lunar_node,
+        }
+        for planet, point in point_map.items():
+            planet_house[planet] = _house_name_to_number(getattr(point, "house", None))
+
         return planet_house, chart
     except Exception as e:
         st.error(f"Error: {e}")
@@ -165,20 +196,27 @@ if st.session_state.get("chart_generated", False):
         if full_chart:
             st.write("**Planetary Positions (Vedic)**")
             data = []
-            for p in full_chart.planets:
-                planet_name = p["name"]
-                if planet_name in ["Mean_Node", "True_Node"]: planet_name = "Rahu"
-                if planet_name == "Mean_Asc_Node": planet_name = "Ketu"
-                row = {
+            chart_points = [
+                ("Sun", full_chart.sun),
+                ("Moon", full_chart.moon),
+                ("Mars", full_chart.mars),
+                ("Mercury", full_chart.mercury),
+                ("Jupiter", full_chart.jupiter),
+                ("Venus", full_chart.venus),
+                ("Saturn", full_chart.saturn),
+                ("Rahu", full_chart.true_north_lunar_node),
+                ("Ketu", full_chart.true_south_lunar_node),
+            ]
+            for planet_name, point in chart_points:
+                data.append({
                     "Planet": planet_name,
-                    "Rasi (Sign)": p.get("sign", "N/A"),
-                    "Degree": f"{p.get('degree', 0):.2f}°",
-                    "House": p.get("house", "N/A"),
-                    "Nakshatra": p.get("nakshatra", "N/A"),
-                    "Pada": p.get("nakshatra_pada", "N/A"),
-                    "Retro": "R" if p.get("retrograde", False) else ""
-                }
-                data.append(row)
+                    "Rasi (Sign)": getattr(point, "sign", "N/A"),
+                    "Degree": f"{getattr(point, 'position', 0):.2f}°",
+                    "House": _house_name_to_number(getattr(point, "house", "")) or "N/A",
+                    "Nakshatra": "N/A",
+                    "Pada": "N/A",
+                    "Retro": "R" if getattr(point, "retrograde", False) else ""
+                })
             st.table(data)
 
             st.caption("✅ Calculated with Swiss Ephemeris + Lahiri Ayanamsa • Full Vedic (Parashari) system")
