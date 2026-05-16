@@ -5,7 +5,7 @@ import time
 import json
 import os
 from datetime import datetime
-from kerykeion import Kerykeion
+from kerykeion import KrInstance   
 from geopy.geocoders import Nominatim
 
 st.set_page_config(page_title="Lal Kitab AI Astro", page_icon="🪐", layout="wide")
@@ -37,10 +37,21 @@ st.markdown(t("subtitle"))
 CREDITS_FILE = "user_credits.json"
 def load_credits():
     if os.path.exists(CREDITS_FILE):
-        with open(CREDITS_FILE, "r") as f: return json.load(f)
+        try:
+            with open(CREDITS_FILE, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return {"balance": 100}
     return {"balance": 100}
 
+def save_credits(data):
+    with open(CREDITS_FILE, "w") as f:
+        json.dump(data, f)
+    return data
+
 credits_data = load_credits()
+if not os.path.exists(CREDITS_FILE):
+    save_credits(credits_data)
 st.sidebar.metric("Your Credits", f"₹{credits_data['balance']}")
 
 st.sidebar.header(t("birth_details"))
@@ -65,30 +76,43 @@ def get_full_chart(birth_details, year=None, month=None, day=None):
     try:
         geolocator = Nominatim(user_agent="lal_kitab_app")
         loc = geolocator.geocode(birth_details["place"] + ", India")
-        if not loc: return None, None
+        if not loc: 
+            st.error("Location not found.")
+            return None, None
         
         use_date = birth_details["date"]
         if year: use_date = use_date.replace(year=year)
         if month and day: use_date = use_date.replace(month=month, day=day)
         
-        chart = Kerykeion(
-            name=birth_details["name"], year=use_date.year, month=use_date.month, day=use_date.day,
-            hour=birth_details["time"].hour, minute=birth_details["time"].minute,
-            city=birth_details["place"], nation="IN",
-            lat=loc.latitude, lng=loc.longitude, tz=5.5,
-            sidereal=True, ayanamsa="lahiri"
+        # ← Yeh line change karo
+        chart = KrInstance(
+            name=birth_details["name"],
+            year=use_date.year,
+            month=use_date.month,
+            day=use_date.day,
+            hour=birth_details["time"].hour,
+            minute=birth_details["time"].minute,
+            city=birth_details["place"],
+            nation="IN",
+            lat=loc.latitude,
+            lng=loc.longitude,
+            tz=5.5,
+            sidereal=True,
+            ayanamsa="lahiri"
         )
         
         planet_house = {}
         for p in chart.planets:
-            if p["name"] in ["Mean_Node", "True_Node"]: planet_house["Rahu"] = p["house"]
-            elif p["name"] == "Mean_Asc_Node": planet_house["Ketu"] = p["house"]
-            else: planet_house[p["name"]] = p["house"]
+            if p["name"] in ["Mean_Node", "True_Node"]:
+                planet_house["Rahu"] = p["house"]
+            elif p["name"] == "Mean_Asc_Node":
+                planet_house["Ketu"] = p["house"]
+            else:
+                planet_house[p["name"]] = p["house"]
         return planet_house, chart
     except Exception as e:
         st.error(f"Error: {e}")
         return None, None
-
 # ====================== LAL KITAB DIAGRAM (unchanged) ======================
 def draw_lal_kitab_chart(planet_house, title):
     fig, ax = plt.subplots(figsize=(9, 9))
@@ -126,12 +150,13 @@ if st.session_state.get("chart_generated", False):
         solar, _ = get_full_chart(bd, year=bd['varsh_year'])
         if solar: draw_lal_kitab_chart(solar, f"SOLAR RETURN {bd['varsh_year']}")
     with tab4:
-        # Transits + Remedies (same as previous version)
         st.subheader(f"🌌 Gochara Transits on {bd['transit_date']}")
         transit_planets, _ = get_full_chart(bd, year=bd['transit_date'].year, month=bd['transit_date'].month, day=bd['transit_date'].day)
         if transit_planets:
             draw_lal_kitab_chart(transit_planets, f"TRANSITS (GOCHAR) {bd['transit_date']}")
-            # Remedies code from previous version...
+            st.info("Remedies are currently provided by the AI Pandit chat. Ask for Lal Kitab remedies in the chat.")
+        else:
+            st.warning("Transit chart could not be generated. Check location and date details.")
 
     # ====================== NEW VEDIC ASTROLOGY TAB ======================
     with tab5:
@@ -200,11 +225,17 @@ if prompt := st.chat_input("Ask about Vedic positions, Nakshatra, Dasha, Lal Kit
             with st.spinner("Pandit ji thinking..."):
                 response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
                 if response.status_code == 200:
-                    reply = response.json()["choices"][0]["message"]["content"]
-                    st.write(reply)
-                    st.session_state.messages.append({"role": "assistant", "content": reply})
+                    payload = response.json()
+                    choice = payload.get("choices", [{}])[0]
+                    reply = choice.get("message", {}).get("content")
+                    if reply:
+                        st.write(reply)
+                        st.session_state.messages.append({"role": "assistant", "content": reply})
+                    else:
+                        st.error("OpenRouter response was not in the expected format.")
                 else:
-                    st.error("API error")
+                    error_text = response.text or response.reason
+                    st.error(f"OpenRouter API error ({response.status_code}): {error_text}")
 
         elapsed = int(time.time() - st.session_state.chat_start_time)
         if elapsed > 60:

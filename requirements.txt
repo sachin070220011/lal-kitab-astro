@@ -1,5 +1,6 @@
 streamlit
 matplotlib
 requests
-kerykeion
+kerykeion>=0.4.0
 geopy
+pytz
